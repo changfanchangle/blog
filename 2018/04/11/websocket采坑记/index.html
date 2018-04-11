@@ -1,0 +1,175 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="X-UA-Compatible" content="IE=edge"><title> websocket采坑记 · 常烦常乐的博客</title><meta name="description" content="websocket采坑记 - 常烦常乐"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.png"><link rel="stylesheet" href="/css/apollo.css"><link rel="search" type="application/opensearchdescription+xml" href="http://changfanchangle.com/atom.xml" title="常烦常乐的博客"></head><body><div class="wrap"><header><a href="/" class="logo-link"><img src="/favicon.png" alt="logo"></a><ul class="nav nav-list"><li class="nav-list-item"><a href="/" target="_self" class="nav-list-link">博客</a></li><li class="nav-list-item"><a href="/archives/" target="_self" class="nav-list-link">目录</a></li><li class="nav-list-item"><a href="https://github.com/changfanchangle" target="_blank" class="nav-list-link">GITHUB地址</a></li></ul></header><main class="container"><div class="post"><article class="post-block"><h1 class="post-title">websocket采坑记</h1><div class="post-info">2018年4月11日</div><div class="post-content"><p>记录一次工作中用到的websocket时，碰到的问题<br><a id="more"></a></p>
+<h1 id="websocket采坑记"><a href="#websocket采坑记" class="headerlink" title="websocket采坑记"></a>websocket采坑记</h1><p>项目中想用做个实时统计，像是110警情大屏那种，所以用到了websocket，结果踩了不少坑，再次记录下，以作价值。</p>
+<p>环境：spring,springMVC(4.2.4.RELEASE)，tomcat7</p>
+<hr>
+<h2 id="问题1：session对象是不一样的"><a href="#问题1：session对象是不一样的" class="headerlink" title="问题1：session对象是不一样的"></a>问题1：session对象是不一样的</h2><p>http的时候，是javax.servlet.http.HttpSession<br>而websocket的时候javax.websocket.Session</p>
+<p>http的session一般用于保存用户信息，根据用户，http请求的时候携带Cookie:JSESSIONID，进行区分，实现多例。http的session的getId()就是JSESSIONID，比如BD70D706E4B975EA5CE7418152D3F8DC这种。</p>
+<p>而websocket的Session则有很多用处，保存信息，发送请求，可以说websocket前后端交互用的变量和方法，都保存在websocket的Session里。<br>同时，websocket的Session是根据前端创建连接多例的，也就是说，前端每new WebSocket进行open一次，就创建一个websocket的Session。websocket的Session的getId()是从1开始递增的序列。</p>
+<p>关于http的session和websocket的session同步的问题。<br>场景：系统本身是标准的web项目，但是要求追加一个运营统计功能，实时监视数据变化，这时选择了更能体现实时的websocket，但是原本用户页面和websocket页面的登录怎么办？<br>具体来说，有以下几个问题</p>
+<ol>
+<li>websocket连接建立时，判断httpsession是否已经登录了，未登录的时候，拒绝登录</li>
+<li>httpsession退出的时候，断开websocket的连接</li>
+</ol>
+<p>目前解决方式：<br>首先，创建对应的Configurator对象，在对象中临时保存httpsession</p>
+<pre>public class WebsocketSessionConfigurator extends ServerEndpointConfig.Configurator {
+    @Override
+    public void modifyHandshake(ServerEndpointConfig config, HandshakeRequest request, HandshakeResponse response) {
+        // 建立websocket连接的时候，保存建立连接使用时候的session
+        HttpSession httpSession = (HttpSession) request.getHttpSession();
+        if (null != httpSession) {
+            config.getUserProperties().put(HttpSession.class.getName(), httpSession);
+        }
+    }
+}</pre>
+
+<p>然后，在@ServerEndpoint中使用Configurator，并在onopen中将其保存在websocket的session中保存httpsession</p>
+<pre>
+@Component
+@ServerEndpoint(value = "/xxxx", configurator = WebsocketSessionConfigurator.class)
+public class xxxxWebSocketController extends BaseWebSocketController {
+
+    // ***重要***
+    // websocket的session连接对象用类集合(线程安全)
+    private static Map<string, session=""> wsSessionMap = Maps.newConcurrentMap();
+    // httpsession对应websocket的session用
+    private static Map<string, set<string="">> httpToWsSessionMap = Maps.newConcurrentMap();
+    // 保存在wsSession中的httpsession的key
+    private final static String WS_SESSION_KEY = "session";
+    // 静态变量，用来记录当前在线连接数
+    private static volatile int onlineCount = 0;
+
+    @OnOpen
+    public void onOpen(@PathParam("param") String param, Session wsSession, EndpointConfig config) throws IOException {
+        if (!config.getUserProperties().containsKey(HttpSession.class.getName())){
+            // 未登录时
+            wsSession.getAsyncRemote().sendText(ToolsUtil.strToJson("未登录，请先登录","99"));
+            wsSession.close();  // 后端主动断开会引发异常，改为前端判断后前端断开
+            return ;
+        }
+        // httpsessinn保存
+        HttpSession httpSession = (HttpSession) config.getUserProperties().get(HttpSession.class.getName());
+        wsSession.getUserProperties().put(WS_SESSION_KEY, httpSession);
+        wsSessionMap.put(wsSession.getId(),wsSession);
+        // http的session和websocket的session对应
+        if (!httpToWsSessionMap.containsKey(httpSession.getId())){
+            httpToWsSessionMap.put(httpSession.getId(),Sets.newCopyOnWriteArraySet());
+        }
+        httpToWsSessionMap.get(httpSession.getId()).add(wsSession.getId());
+        addOnlineCount();
+        // log信息
+        wsSession.getAsyncRemote().sendText(ToolsUtil.strToJson("登录成功","90"));
+        System.out.println(MessageFormat.format("wsSession id:{0}  httpSession id:{1} 的用户已登录websocket,当前连接数：{2}",wsSession.getId(), httpSession.getId(), onlineCount));
+    }
+
+
+    @OnClose
+    public void onClose(Session wsSession, CloseReason reason) {
+        if(wsSessionMap.containsKey(wsSession.getId())){
+        // 用户信息取得
+        HttpSession httpSession = (HttpSession)wsSession.getUserProperties().get(WS_SESSION_KEY);
+        String wsSessionId = wsSession.getId();
+        // 退出处理
+        wsSessionMap.remove(wsSession.getId());
+        subOnlineCount();
+        if (httpToWsSessionMap.containsKey(httpSession.getId())){
+            Set<string> setSession = httpToWsSessionMap.get(httpSession.getId());
+            setSession.remove(wsSession.getId());
+            if(setSession.size() == 0){
+                httpToWsSessionMap.remove(httpSession.getId());
+            }
+        }
+        // log信息
+        System.out.println(MessageFormat.format("wsSession id:{0}  httpSession id:{1} 的用户已退出websocket,当前连接数：{2}",wsSessionId, httpSession.getId(), onlineCount));
+    }
+
+    public static void disconnectByHttpsession(String httpsessionId) {
+        sendMsgByHttpsession(httpsessionId,ToolsUtil.strToJson("用户登出","99"));
+    }
+}
+</string></string,></string,></pre>
+最后，当系统注销，进行登出的时候，注销。
+<pre>
+    @ResponseBody
+    @RequestMapping(value="/exit")
+    public String exit(HttpServletRequest req,
+            HttpServletResponse resp){
+        HttpSession session = req.getSession(false);//防止创建Session
+        if(session != null){
+            session.removeAttribute(session.getId());
+            // 断开websocket连接
+            xxxxWebSocketController.disconnectByHttpsession(session.getId());
+        }
+        return ToolsUtil.strToJson("ok");
+    }</pre>
+
+<hr>
+<h2 id="问题2：在-ServerEndpoint中注入server失败"><a href="#问题2：在-ServerEndpoint中注入server失败" class="headerlink" title="问题2：在@ServerEndpoint中注入server失败"></a>问题2：在@ServerEndpoint中注入server失败</h2><p>在实际使用中，发现@Autowired来注入Service无效，报出空指针异常。<br><br>思考后，觉得这也是正常，ServerEndpoint的websocket对象，实际是创建一个websocket连接时创建的，而@Autowired是web项目启动，初始化时的事情。采坑，调查后，发现有两种解决方法，根据spring初始化方法请自行选择:</p>
+<p>1,在web.xml中使用了ContextLoaderListener时（使用spring的方法初始化bean），只需要@ServerEndpoint的configurator使用SpringConfigurator，或者自定义的configurator继承SpringConfigurator。</p>
+<pre>
+@ServerEndpoint(value = "/xxxxx", configurator = SpringConfigurator.class)
+public class xxxxxWebSocketController extends BaseWebSocketController {
+    ......
+}
+</pre>
+或者
+<pre>
+public class WebsocketSessionConfigurator extends SpringConfigurator {
+    @Override
+    public void modifyHandshake(ServerEndpointConfig config, HandshakeRequest request, HandshakeResponse response) {
+        .......
+    }
+}</pre>
+
+<p>2,如果web.xml中使用DispatcherServlet，而没有用ContextLoaderListener时（springMVC的方式初始化bean）。推荐使用实现ApplicationContextAware，创建工具类的方法来创建bean:<br><br>创建类对象</p>
+<pre>
+import org.springframework.beans.BeansException;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.stereotype.Component;
+
+public class SpringContextHelper implements ApplicationContextAware {
+    private static ApplicationContext context = null;
+
+    @Override
+    public void setApplicationContext(ApplicationContext applicationContext)
+            throws BeansException {
+        context = applicationContext;
+    }
+
+    public static Object getBean(String name){
+        return context.getBean(name);
+    }
+}
+</pre>
+bean定义：
+
+    <!--Spring中bean获取的工具类-->
+    <bean id="springContextUtils" class="com.utils.websocket.SpringContextHelper">
+
+使用：
+<pre>
+    xxxService = (xxxService) SpringContextHelper.getBean("xxxService");
+</pre>
+
+
+<hr>
+<h2 id="问题3：在onopen中调用close-发生异常"><a href="#问题3：在onopen中调用close-发生异常" class="headerlink" title="问题3：在onopen中调用close()发生异常"></a>问题3：在onopen中调用close()发生异常</h2><p>场景：判断用户是否已经登录，未登录时拒绝连接。<br><br>在onopen中调用websocket的Session的close()后，连接正常断开，也执行了onclose，但是这之后报以下异常：<br></p>
+<pre>java.lang.IllegalStateException: The WebSocket session has been closed and no method (apart from close()) may be called on a closed session
+    at org.apache.tomcat.websocket.WsSession.checkState(WsSession.java:643)
+    at org.apache.tomcat.websocket.WsSession.addMessageHandler(WsSession.java:168)
+    at org.apache.tomcat.websocket.pojo.PojoEndpointBase.doOnOpen(PojoEndpointBase.java:81)
+    at org.apache.tomcat.websocket.pojo.PojoEndpointServer.onOpen(PojoEndpointServer.java:70)
+    at org.apache.tomcat.websocket.server.WsHttpUpgradeHandler.init(WsHttpUpgradeHandler.java:129)
+    at org.apache.coyote.AbstractProtocol$AbstractConnectionHandler.process(AbstractProtocol.java:629)
+    at org.apache.tomcat.util.net.JIoEndpoint$SocketProcessor.run(JIoEndpoint.java:310)
+    at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1142)
+    at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:617)
+    at java.lang.Thread.run(Thread.java:745)</pre>
+
+
+<p>网上没有找到比较合适的答案，猜测是onopen的时候，判断是tomcat在onopen的时候，对close的处理还不充分，但是websocket本身是由前端发起的，所以转换思路，改为通过向前端发送特定的结果来使前端主动执行close方法来关闭连接，这样一来，前端发起，前端关闭。</p>
+<p><pre>socket = new WebSocket(url);<br>socket.onopen = function(evt){<br>    if (evt.data == “”) {<br>        return “”;<br>    }<br>    // 约定，99为登出用的errorcode<br>    var data = JSON.parse(evt.data)<br>    if(data.code == “99”){<br>        evt.target.close();<br>        alert(data.code + “:” + data.data);<br>        return ;<br>    }<br>    if(data.code != “00”){<br>        console.log(data.code + “:” + data.data);<br>        return ;<br>    }</pre></p>
+<pre><code>......
+</code></pre><p>};</p>
+<hr>
+</bean></div></article></div></main><footer><div class="paginator"><a href="/2018/02/10/工作五年的一些领悟/" class="next">NEXT</a></div><div class="copyright"><p>© 2018 <a href="http://changfanchangle.com">常烦常乐</a>, powered by <a href="https://hexo.io/" target="_blank">Hexo</a> and <a href="https://github.com/pinggod/hexo-theme-apollo" target="_blank">hexo-theme-apollo</a>.</p></div></footer></div><script async src="//cdn.bootcss.com/mathjax/2.7.0/MathJax.js?config=TeX-MML-AM_CHTML" integrity="sha384-crwIf/BuaWM9rM65iM+dWFldgQ1Un8jWZMuh3puxb8TOY9+linwLoI7ZHZT+aekW" crossorigin="anonymous"></script><script>(function(b,o,i,l,e,r){b.GoogleAnalyticsObject=l;b[l]||(b[l]=function(){(b[l].q=b[l].q||[]).push(arguments)});b[l].l=+new Date;e=o.createElement(i);r=o.getElementsByTagName(i)[0];e.src='//www.google-analytics.com/analytics.js';r.parentNode.insertBefore(e,r)}(window,document,'script','ga'));ga('create',"UA-65933410-1",'auto');ga('send','pageview');</script></body></html>
