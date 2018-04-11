@@ -1,0 +1,44 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="X-UA-Compatible" content="IE=edge"><title> resources中的execl无法正常读取问题 · 常烦常乐的博客</title><meta name="description" content="resources中的execl无法正常读取问题 - 常烦常乐"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.png"><link rel="stylesheet" href="/css/apollo.css"><link rel="search" type="application/opensearchdescription+xml" href="http://changfanchangle.com/atom.xml" title="常烦常乐的博客"></head><body><div class="wrap"><header><a href="/" class="logo-link"><img src="/favicon.png" alt="logo"></a><ul class="nav nav-list"><li class="nav-list-item"><a href="/" target="_self" class="nav-list-link">博客</a></li><li class="nav-list-item"><a href="/archives/" target="_self" class="nav-list-link">目录</a></li><li class="nav-list-item"><a href="https://github.com/changfanchangle" target="_blank" class="nav-list-link">GITHUB地址</a></li></ul></header><main class="container"><div class="post"><article class="post-block"><h1 class="post-title">resources中的execl无法正常读取问题</h1><div class="post-info">2018年4月11日</div><div class="post-content"><p>想要使用现成的execl作为模板，导出数据下载，但是碰到模板无法读取的问题。<br><a id="more"></a></p>
+<h3 id="resources中的execl无法正常读取问题"><a href="#resources中的execl无法正常读取问题" class="headerlink" title="resources中的execl无法正常读取问题"></a>resources中的execl无法正常读取问题</h3><p><strong>现象</strong>：<br><br>在JAVA的resources文件夹中放置了execl模板，想要在读取模板的基础上编辑并下载，结果在转换为workbook时，报以下问题。</p>
+<pre>
+org.apache.poi.openxml4j.exceptions.InvalidOperationException: Could not open the specified zip entry source stream
+    org.apache.poi.openxml4j.opc.ZipPackage.openZipEntrySourceStream(ZipPackage.java:205)
+    org.apache.poi.openxml4j.opc.ZipPackage.openZipEntrySourceStream(ZipPackage.java:187)
+    org.apache.poi.openxml4j.opc.ZipPackage.openZipEntrySourceStream(ZipPackage.java:161)
+    ......
+</pre>
+
+<p><strong>原因</strong>：<br><br>本来以为是路径的事情，后来才发现是放在resources中的文件，在maven进行编译的时候回被转码，导致文件内部混乱，无法读取。</p>
+<p><strong>解决</strong>：<br><br>maven编译命令中追加相关除外条件解决，详见以下的nonFilteredFileExtension配置：</p>
+<pre><code>&lt;plugin&gt;
+    &lt;artifactId&gt;maven-resources-plugin&lt;/artifactId&gt;
+    &lt;version&gt;2.5&lt;/version&gt;
+    &lt;executions&gt;
+        &lt;execution&gt;
+            &lt;id&gt;copy-xmls&lt;/id&gt;
+            &lt;phase&gt;process-sources&lt;/phase&gt;
+            &lt;goals&gt;
+                &lt;goal&gt;copy-resources&lt;/goal&gt;
+            &lt;/goals&gt;
+            &lt;configuration&gt;
+                &lt;outputDirectory&gt;${basedir}/target/classes&lt;/outputDirectory&gt;
+                &lt;resources&gt;
+                    &lt;resource&gt;
+                        &lt;directory&gt;${basedir}/src/main/java&lt;/directory&gt;
+                        &lt;includes&gt;
+                            &lt;include&gt;**/*.xml&lt;/include&gt;
+                        &lt;/includes&gt;
+                    &lt;/resource&gt;
+                &lt;/resources&gt;
+            &lt;/configuration&gt;
+        &lt;/execution&gt;
+    &lt;/executions&gt;
+    &lt;configuration&gt;
+        &lt;nonFilteredFileExtensions&gt;
+            &lt;nonFilteredFileExtension&gt;xlsx&lt;/nonFilteredFileExtension&gt;
+            &lt;nonFilteredFileExtension&gt;xls&lt;/nonFilteredFileExtension&gt;
+        &lt;/nonFilteredFileExtensions&gt;
+    &lt;/configuration&gt;
+&lt;/plugin&gt;
+</code></pre><hr>
+</div></article></div></main><footer><div class="paginator"><a href="/2018/04/11/websocket采坑记/" class="prev">PREV</a><a href="/2018/02/10/工作五年的一些领悟/" class="next">NEXT</a></div><div class="copyright"><p>© 2018 <a href="http://changfanchangle.com">常烦常乐</a>, powered by <a href="https://hexo.io/" target="_blank">Hexo</a> and <a href="https://github.com/pinggod/hexo-theme-apollo" target="_blank">hexo-theme-apollo</a>.</p></div></footer></div><script async src="//cdn.bootcss.com/mathjax/2.7.0/MathJax.js?config=TeX-MML-AM_CHTML" integrity="sha384-crwIf/BuaWM9rM65iM+dWFldgQ1Un8jWZMuh3puxb8TOY9+linwLoI7ZHZT+aekW" crossorigin="anonymous"></script><script>(function(b,o,i,l,e,r){b.GoogleAnalyticsObject=l;b[l]||(b[l]=function(){(b[l].q=b[l].q||[]).push(arguments)});b[l].l=+new Date;e=o.createElement(i);r=o.getElementsByTagName(i)[0];e.src='//www.google-analytics.com/analytics.js';r.parentNode.insertBefore(e,r)}(window,document,'script','ga'));ga('create',"UA-65933410-1",'auto');ga('send','pageview');</script></body></html>
